@@ -1,8 +1,11 @@
 __pycache__/
 *.pyc
+.claude-flow/
 joblogs/
 crest_example/
-*_crest.sh
 crest_conformers.xyz
 crest_best.xyz
 crest_rotamers.xyz
+# generated job scripts, but not this repo's own installer
+*_crest.sh
+!install_crest.sh
