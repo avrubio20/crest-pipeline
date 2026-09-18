@@ -47,7 +47,9 @@ input = "mol.xyz"
 TOML
 printf '1\n\nC 0.0 0.0 0.0\n' > mol.xyz
 
-R() { "$RAW" "$@"; }
+# Most checks read Slurm directives and drive the script with SLURM_* vars, so
+# the scheduler is pinned: on a UGE machine it would otherwise write #$ lines.
+R() { "$RAW" --scheduler slurm "$@"; }
 runjob() { env SLURM_JOB_ID=111 SLURM_SUBMIT_DIR="$T" "$@" bash mol_crest.sh; }
 
 # 1. a script is generated and not submitted
@@ -64,7 +66,7 @@ grep -q 'cpus-per-task=8' mol_crest.sh || fail "-p did not override the .toml"
 grep -q 'mem=32768' mol_crest.sh || fail "-m default not 4 GB/thread for -p"
 
 # 4. the UGE dialect is emitted on request, with per-slot memory
-R mol.toml --scheduler uge --no-submit >/dev/null 2>&1
+"$RAW" mol.toml --scheduler uge --no-submit >/dev/null 2>&1
 grep -q '^#\$ -pe shared 4' mol_crest.sh || fail "no UGE parallel environment"
 grep -q 'h_data=2048M' mol_crest.sh || fail "UGE memory is not per slot"
 grep -q '^#\$ -notify' mol_crest.sh || fail "no -notify, so no USR1 warning"
