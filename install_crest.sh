@@ -7,9 +7,12 @@
 #   ./install_crest.sh --example           write a ready-to-run test case
 #   ./install_crest.sh --dry-run           print what it would do, write nothing
 #
-#   --prefix DIR      the tools go here            [$HOME/crest]
+#   --prefix DIR      everything goes under here   [$HOME/crest]
 #   --bindir DIR      just the tools               [PREFIX/bin]
-#   --crest-bin PATH  the crest binary             [found on PATH]
+#   --crest-dir DIR   where CREST itself goes      [PREFIX/opt/crest-3.0.2]
+#   --install-crest   download CREST into it
+#   --crest-tarball F install CREST from a local tarball instead
+#   --crest-bin PATH  a crest you already have     [found on PATH]
 #   --xtb-bin DIR     the directory holding xtb    [found on PATH]
 #   --scratch DIR     fast temporary space         [detected]
 #   --config FILE     where the choices go         [$HOME/.crest.conf]
@@ -17,10 +20,13 @@
 #   --add-path        put bindir on your PATH
 #   --force           replace installed files that differ from these
 #
-# CREST and xtb are not downloaded -- clusters have them. This finds them and
-# records where. Re-running is safe and nothing here ever submits a job.
+# xtb is never installed here: install it yourself, then point --xtb-bin at it.
+# CREST is found if it is already about, or downloaded with --install-crest.
+# Re-running is safe and nothing here ever submits a job.
 set -uo pipefail
 
+CREST_VERSION="3.0.2"
+CREST_URL="https://github.com/crest-lab/crest/releases/download/v${CREST_VERSION}/crest-gnu-12-ubuntu-latest.tar.xz"
 TOOLS=(runcrest.py prepcrest.py)
 SUITES=(test_runcrest.sh)
 SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -35,7 +41,8 @@ else
 fi
 
 DEFAULT_PREFIX="$HOME/crest"
-PREFIX=""; BINDIR=""; CREST_BIN=""; XTB_BIN=""; SCRATCH=""
+PREFIX=""; BINDIR=""; CREST_DIR=""; CREST_BIN=""; XTB_BIN=""; SCRATCH=""
+CREST_TARBALL=""; INSTALL_CREST=0
 CONFIG="$HOME/.crest.conf"
 DRY=0; FORCE=0; CHECK=0; ADDPATH=0; EXAMPLE=0; SHARED=0
 
@@ -50,6 +57,9 @@ while [[ $# -gt 0 ]]; do
         --prefix)    argval "$1" "${2:-}"; PREFIX="$2";    shift 2;;
         --bindir)    argval "$1" "${2:-}"; BINDIR="$2";    shift 2;;
         --crest-bin) argval "$1" "${2:-}"; CREST_BIN="$2"; shift 2;;
+        --crest-dir) argval "$1" "${2:-}"; CREST_DIR="$2"; shift 2;;
+        --crest-tarball) argval "$1" "${2:-}"; CREST_TARBALL="$2"; INSTALL_CREST=1; shift 2;;
+        --install-crest) INSTALL_CREST=1; shift;;
         --xtb-bin)   argval "$1" "${2:-}"; XTB_BIN="$2";   shift 2;;
         --scratch)   argval "$1" "${2:-}"; SCRATCH="$2";   shift 2;;
         --config)    argval "$1" "${2:-}"; CONFIG="$2";    shift 2;;
@@ -106,8 +116,14 @@ find_xtb() {
 }
 
 [[ -n "$PREFIX" && -z "$BINDIR" ]] && BINDIR="$(expand "$PREFIX")/bin"
+[[ -n "$PREFIX" && -z "$CREST_DIR" ]] && CREST_DIR="$(expand "$PREFIX")/opt/crest-$CREST_VERSION"
 BINDIR="$(expand "${BINDIR:-${CFG_BINDIR:-$DEFAULT_PREFIX/bin}}")"
-CREST_BIN="${CREST_BIN:-${CFG_CREST:-$(find_crest || true)}}"
+CREST_DIR="$(expand "${CREST_DIR:-$DEFAULT_PREFIX/opt/crest-$CREST_VERSION}")"
+if [[ $INSTALL_CREST -eq 1 ]]; then
+    CREST_BIN="${CREST_BIN:-$CREST_DIR/crest}"
+else
+    CREST_BIN="${CREST_BIN:-${CFG_CREST:-$(find_crest || true)}}"
+fi
 XTB_BIN="${XTB_BIN:-${CFG_XTB_BIN:-$(find_xtb || true)}}"
 SCRATCH="${SCRATCH:-${CFG_SCRATCH:-$DEF_SCRATCH}}"
 # xtb needs its parameter directory; it sits beside bin/ in every release.
@@ -142,9 +158,15 @@ if [[ $CHECK -eq 1 ]]; then
 
     if [[ -x "$XTB_BIN/xtb" ]] && "$XTB_BIN/xtb" --version >/dev/null 2>&1; then
         ok "xtb runs: $XTB_BIN/xtb"
-        "$XTB_BIN/xtb" --help 2>&1 | grep -q -- --gxtb \
-            && ok "this xtb knows --gxtb" \
-            || note "this xtb has no --gxtb; fine for CREST, not for g-xTB work"
+        if "$XTB_BIN/xtb" --help 2>&1 | grep -q -- --gxtb; then
+            ok "this xtb knows --gxtb"
+        elif [[ "$(cfg require_gxtb)" == no ]]; then
+            note "this xtb has no --gxtb, and the config says that is fine"
+        else
+            bad "this xtb does not know --gxtb"
+            echo "        Install the gxtb build and point --xtb-bin at it, or put" >&2
+            echo "        require_gxtb = no in $CONFIG if plain xtb is what you want." >&2
+        fi
     else
         bad "xtb does not run: ${XTB_BIN:-not found}/xtb"
         echo "        Point at it with --xtb-bin /path/to/xtb/bin"
@@ -191,11 +213,49 @@ echo "  config:   $CONFIG"
 [[ $DRY -eq 1 ]] && echo "  (dry run -- nothing will be written)"
 echo
 
+if [[ $INSTALL_CREST -eq 1 ]]; then
+    if [[ -x "$CREST_DIR/crest" && $FORCE -eq 0 ]]; then
+        echo "CREST: already at $CREST_DIR"
+    elif [[ $DRY -eq 1 ]]; then
+        [[ -n "$CREST_TARBALL" ]] \
+            && echo "  would: unpack $CREST_TARBALL into $CREST_DIR" \
+            || echo "  would: download CREST $CREST_VERSION into $CREST_DIR"
+    else
+        mkdir -p "$CREST_DIR" || { echo "ERROR: cannot create $CREST_DIR" >&2; exit 1; }
+        if [[ -n "$CREST_TARBALL" ]]; then
+            echo "CREST: unpacking $CREST_TARBALL into $CREST_DIR"
+            tarball="$CREST_TARBALL"
+            [[ -f "$tarball" ]] || { echo "ERROR: no such file: $tarball" >&2; exit 1; }
+        else
+            echo "CREST: downloading $CREST_VERSION into $CREST_DIR"
+            tarball="$(mktemp)"
+            trap '[[ -n "${tarball:-}" && -z "$CREST_TARBALL" ]] && rm -f "$tarball"' EXIT
+            if command -v curl >/dev/null; then
+                curl -fsSL "$CREST_URL" -o "$tarball"
+            elif command -v wget >/dev/null; then
+                wget -q "$CREST_URL" -O "$tarball"
+            else
+                echo "ERROR: neither curl nor wget. Download $CREST_URL" >&2
+                echo "       elsewhere and pass --crest-tarball FILE." >&2
+                exit 1
+            fi || { echo "ERROR: could not download CREST. If this node has no" >&2
+                    echo "       way out, use --crest-tarball FILE." >&2; exit 1; }
+        fi
+        # The release tarball holds a crest/ directory; --strip-components drops it.
+        tar -xJf "$tarball" --strip-components=1 -C "$CREST_DIR" \
+            || { echo "ERROR: could not unpack $tarball" >&2; exit 1; }
+        [[ -x "$CREST_DIR/crest" ]] \
+            || { echo "ERROR: no crest binary in $CREST_DIR after unpacking" >&2; exit 1; }
+        trap - EXIT
+    fi
+fi
+
 if [[ -z "$CREST_BIN" || -z "$XTB_BIN" ]]; then
     echo "ERROR: could not find crest and/or xtb on this machine." >&2
-    echo "       They are not downloaded for you -- clusters usually have them." >&2
-    echo "       Load the module that provides them, or point at them:" >&2
-    echo "         ./install_crest.sh --crest-bin /path/to/crest --xtb-bin /path/to/xtb/bin" >&2
+    [[ -z "$CREST_BIN" ]] && echo "       For CREST: --install-crest downloads it." >&2
+    [[ -z "$XTB_BIN" ]] && {
+        echo "       xtb is not installed for you. Install it where you want it," >&2
+        echo "       then: ./install_crest.sh --xtb-bin /path/to/xtb/bin" >&2; }
     exit 1
 fi
 
@@ -236,6 +296,8 @@ xtb_bin   = $XTB_BIN
 xtb_path  = $XTB_PATH
 scratch   = $SCRATCH
 scheduler = $SCHEDULER
+# Set to no if a plain xtb without --gxtb is acceptable.
+require_gxtb = yes
 
 # UGE only: the parallel environment and node policy at your site.
 uge_pe        = shared

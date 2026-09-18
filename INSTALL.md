@@ -7,8 +7,13 @@ monitoring commands, noted at the end.
 ## What you are installing
 
 *CREST* searches for conformers: it runs a lot of short metadynamics with xtb,
-collects the structures, and sorts them into an ensemble. It and xtb are
-already on most clusters — this does not download them.
+collects the structures, and sorts them into an ensemble. It needs xtb to do
+the actual energies, so you install two things, in this order:
+
+1. **xtb, by hand.** You choose the build and where it goes — this installer
+   never touches it. Use the build that supports `--gxtb` unless you have a
+   reason not to.
+2. **CREST**, which this installer downloads for you if you ask it to.
 
 *These scripts* are the layer around it: building the input file, writing the
 submission script, running in scratch and bringing the right files back.
@@ -26,6 +31,21 @@ schedulers often are not found.
     git clone https://github.com/avrubio20/crest-pipeline.git
     cd crest-pipeline
 
+## Step 2b — install xtb yourself
+
+Put it wherever you keep programs, for example:
+
+    mkdir -p ~/project-houk/Programs
+    cd ~/project-houk/Programs
+    # download the xtb release you want, then unpack it here, e.g.
+    tar -xf xtb-6.7.1-gxtb-*-linux-x86_64.tar.xz
+    ./xtb-6.7.1/bin/xtb --version          # it should print a version
+    ./xtb-6.7.1/bin/xtb --help | grep gxtb # and know --gxtb
+
+Remember that `bin` path: the next step wants it. Nothing else about xtb
+matters here — the installer records where it is and the job script puts it on
+`PATH` for you.
+
 ## Step 3 — check before installing
 
     ./install_crest.sh --check
@@ -42,16 +62,32 @@ them, or point at them directly:
 
 ## Step 4 — install
 
-    ./install_crest.sh --prefix ~/crest --add-path
+    ./install_crest.sh --prefix ~/crest --install-crest \
+                       --xtb-bin ~/project-houk/Programs/xtb-6.7.1/bin \
+                       --add-path
 
-1. Copies `runcrest.py`, `prepcrest.py` and the test suite into `~/crest/bin`.
-2. Writes `~/.crest.conf` recording where crest, xtb and its parameters are,
+1. Downloads CREST 3.0.2 into `~/crest/opt/crest-3.0.2`.
+2. Copies `runcrest.py`, `prepcrest.py` and the test suite into `~/crest/bin`.
+3. Writes `~/.crest.conf` recording where crest, xtb and its parameters are,
    which scheduler this machine uses, and where scratch lives.
-3. Adds `~/crest/bin` to your `PATH` via `~/.bashrc` (or `~/.cshrc` under tcsh).
+4. Adds `~/crest/bin` to your `PATH` via `~/.bashrc` (or `~/.cshrc` under tcsh).
 
-Put it anywhere you can write: `--prefix /u/project/<group>/crest --shared`
-installs once for a whole group, and everyone else needs only that `bin` on
-their `PATH`.
+Everything is a separate flag if you want the pieces apart:
+
+| flag | means |
+|---|---|
+| `--prefix DIR` | everything under one directory |
+| `--bindir DIR` | just the tools |
+| `--crest-dir DIR` | where CREST itself goes |
+| `--install-crest` | download it; leave it off if you already have one |
+| `--crest-bin PATH` | a crest you already have, instead of downloading |
+| `--crest-tarball F` | install from a local tarball, for a node with no network |
+| `--xtb-bin DIR` | the `bin` from step 2b |
+| `--shared` | make the install readable by your unix group |
+
+So a group install is
+`--prefix /u/project/<group>/crest --install-crest --shared`, and everyone else
+needs only that `bin` on their `PATH`.
 
 ## Step 5 — reload and check again
 
@@ -110,7 +146,8 @@ surviving topology yourself.
 | what you see | what it means |
 |---|---|
 | `crest does not run` | not on PATH and not where the installer looks — pass `--crest-bin` |
-| `xtb does not run` | same, `--xtb-bin` — and CREST is useless without it |
+| `xtb does not run` | you have not installed it, or `--xtb-bin` points at the wrong directory. Step 2b |
+| `this xtb does not know --gxtb` | you installed a plain xtb build. Install the gxtb one, or put `require_gxtb = no` in your config |
 | `no share/xtb beside ...` | xtb cannot find its parameters; point `xtb_path` at the right directory |
 | `command not found: runcrest.py` | `PATH` line missing or shell not reloaded — step 5 |
 | `[skip] need both X.toml and X.xyz` | they must sit together in the directory you submit from |

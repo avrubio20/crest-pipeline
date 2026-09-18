@@ -7,16 +7,17 @@ Conformer ensembles from a structure, as a cluster job, on Slurm or UGE.
     ls crest_conformers.xyz     the ensemble, when it lands
 
 These are wrappers around [CREST](https://github.com/crest-lab/crest) 3.x and
-xtb, which they do not install — clusters usually have both, and the installer
-finds them.
+xtb. **You install xtb yourself**, where you want it and in the build you want
+(the one with `--gxtb`, usually). CREST the installer will download for you.
 
 **New here? Read [INSTALL.md](INSTALL.md).**
 
-    ./install_crest.sh --prefix ~/crest --add-path
+    ./install_crest.sh --prefix ~/crest --install-crest \
+                       --xtb-bin /path/to/xtb/bin --add-path
 
 ## Layout
 
-    install_crest.sh  find crest and xtb, put the tools on an account
+    install_crest.sh  install CREST and the tools; find the xtb you installed
     runcrest.py       write and submit the job (Slurm or UGE)
     prepcrest.py      build a CREST 3.x TOML by answering questions
     test_runcrest.sh  15 checks, seconds, no scheduler needed
@@ -61,6 +62,7 @@ Three things it does that are easy to get wrong by hand:
 | `uge_pe` | UGE parallel environment (default `shared`) |
 | `uge_resources` | UGE node policy (default `arch=intel*`) |
 | `uge_project` | UGE project to bill, if your site wants `-P` |
+| `require_gxtb` | `no` to accept an xtb without `--gxtb` |
 
 `CREST_CONF`, `CREST_BIN` override it for one run.
 
