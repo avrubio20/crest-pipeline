@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+joblogs/
+crest_example/
+*_crest.sh
+crest_conformers.xyz
+crest_best.xyz
+crest_rotamers.xyz

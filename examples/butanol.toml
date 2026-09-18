@@ -1,0 +1,11 @@
+input = "butanol.xyz"
+runtype = "imtd-gc"
+threads = 8
+
+[calculation]
+elog = "butanol.log"
+
+[[calculation.level]]
+method = "gfn2"
+uhf = 0
+chrg = 0
