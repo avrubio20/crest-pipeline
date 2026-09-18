@@ -158,7 +158,10 @@ if [[ $CHECK -eq 1 ]]; then
 
     if [[ -x "$XTB_BIN/xtb" ]] && "$XTB_BIN/xtb" --version >/dev/null 2>&1; then
         ok "xtb runs: $XTB_BIN/xtb"
-        if "$XTB_BIN/xtb" --help 2>&1 | grep -q -- --gxtb; then
+        # Captured first, not piped: grep -q exits on the first match, xtb
+        # takes SIGPIPE, and pipefail then reports 141 for a successful match.
+        xtb_help="$("$XTB_BIN/xtb" --help 2>&1)"
+        if grep -q -- --gxtb <<<"$xtb_help"; then
             ok "this xtb knows --gxtb"
         elif [[ "$(cfg require_gxtb)" == no ]]; then
             note "this xtb has no --gxtb, and the config says that is fine"
