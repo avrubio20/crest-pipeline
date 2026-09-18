@@ -124,6 +124,10 @@ Two things that make it come back short of that:
 
       module load python/3.9.6
 
+  If that is your situation, put that line in your `~/.bashrc` so you do not
+  have to remember it every session. The jobs themselves do not need it — only
+  `runcrest.py`, which runs on the login node when you submit.
+
 ## Step 6 — a real search, on the included example
 
     ./install_crest.sh --example
