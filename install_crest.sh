@@ -95,6 +95,10 @@ note() { echo "  note  $*"; }
 cfg() { [[ -f "$CONFIG" ]] && sed -n "s/^ *$1 *= *//p" "$CONFIG" | head -1; }
 CFG_BINDIR="$(cfg bindir)"; CFG_CREST="$(cfg crest)"
 CFG_XTB_BIN="$(cfg xtb_bin)"; CFG_SCRATCH="$(cfg scratch)"
+# Site-specific keys nobody wants to retype when they re-run the installer.
+CFG_UGE_PE="$(cfg uge_pe)"; CFG_UGE_RES="$(cfg uge_resources)"
+CFG_UGE_PROJ="$(cfg uge_project)"; CFG_ACCOUNT="$(cfg account)"
+CFG_REQUIRE_GXTB="$(cfg require_gxtb)"
 
 # PATH first (a module or group install puts them there), then by hand.
 find_crest() {
@@ -177,10 +181,31 @@ if [[ $CHECK -eq 1 ]]; then
     [[ -n "$XTB_PATH" ]] && ok "xtb parameters: $XTB_PATH" \
         || note "no share/xtb beside $XTB_BIN; xtb may not find its parameters"
 
+    # Which copy wins matters: another one earlier on PATH is used instead of
+    # the one just installed, and "on PATH" alone would not say so.
     for tool in "${TOOLS[@]}"; do
-        command -v "$tool" >/dev/null && ok "$tool on PATH" \
-            || bad "$tool not on PATH (add $BINDIR to it)"
+        found="$(command -v "$tool" 2>/dev/null)"
+        if [[ -z "$found" ]]; then
+            bad "$tool not on PATH (add $BINDIR to it)"
+        elif [[ "$found" != "$BINDIR/$tool" ]]; then
+            bad "$tool on PATH is $found"
+            echo "        not $BINDIR/$tool -- that copy is earlier on your PATH"
+            echo "        and is the one that will run. Remove it, or install there."
+        else
+            ok "$tool: $found"
+        fi
     done
+    # runcrest.py needs a python that can run it; the login python3 on some
+    # clusters is old enough that it cannot.
+    if [[ -x "$BINDIR/runcrest.py" ]]; then
+        if "$BINDIR/runcrest.py" --help >/dev/null 2>&1; then
+            ok "runcrest.py runs under $(command -v python3)"
+        else
+            bad "runcrest.py does not run under $(command -v python3) ($(python3 -V 2>&1))"
+            echo "        It needs python 3.7 or newer. On Hoffman2:"
+            echo "            module load python/3.9.6"
+        fi
+    fi
 
     for suite in "${SUITES[@]}"; do
         path="$BINDIR/$suite"; [[ -f "$path" ]] || path="$SRC/$suite"
@@ -289,6 +314,15 @@ else
         || { echo "ERROR: cannot create $(dirname "$CONFIG")" >&2; exit 1; }
     [[ ! -e "$CONFIG" || -w "$CONFIG" ]] \
         || { echo "ERROR: $CONFIG is not yours to write" >&2; exit 1; }
+    # Say what is being replaced: a config pointing at another CREST is easy to
+    # overwrite without noticing.
+    if [[ -f "$CONFIG" ]]; then
+        old_crest="$(cfg crest)"
+        [[ -n "$old_crest" && "$old_crest" != "$CREST_BIN" ]] \
+            && echo "  replacing the config, which pointed at $old_crest"
+        cp "$CONFIG" "$CONFIG.previous" 2>/dev/null \
+            && echo "  previous config kept at $CONFIG.previous"
+    fi
     tmp_config="$CONFIG.$$"
     cat > "$tmp_config" <<CONF
 # CREST pipeline. Written by install_crest.sh on $(date +%F).
@@ -299,12 +333,16 @@ xtb_bin   = $XTB_BIN
 xtb_path  = $XTB_PATH
 scratch   = $SCRATCH
 scheduler = $SCHEDULER
+CONF
+[[ -n "$CFG_ACCOUNT" ]] && echo "account   = $CFG_ACCOUNT" >> "$tmp_config"
+[[ -n "$CFG_UGE_PROJ" ]] && echo "uge_project = $CFG_UGE_PROJ" >> "$tmp_config"
+cat >> "$tmp_config" <<CONF
 # Set to no if a plain xtb without --gxtb is acceptable.
-require_gxtb = yes
+require_gxtb = ${CFG_REQUIRE_GXTB:-yes}
 
 # UGE only: the parallel environment and node policy at your site.
-uge_pe        = shared
-uge_resources = arch=intel*
+uge_pe        = ${CFG_UGE_PE:-shared}
+uge_resources = ${CFG_UGE_RES:-arch=intel*}
 CONF
     [[ -s "$tmp_config" ]] && mv "$tmp_config" "$CONFIG" \
         || { rm -f "$tmp_config"; echo "ERROR: could not write $CONFIG" >&2; exit 1; }

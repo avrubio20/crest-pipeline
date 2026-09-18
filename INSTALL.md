@@ -33,18 +33,34 @@ schedulers often are not found.
 
 ## Step 2b — install xtb yourself
 
-Put it wherever you keep programs, for example:
+**Already have xtb?** Skip the download. Find it (`which xtb`, or look where
+you keep programs), run the two checks at the end of this section, and go on to
+step 3 with its `bin` directory in hand.
+
+Otherwise, download a release and unpack it where you keep programs:
 
     mkdir -p ~/project-houk/Programs
     cd ~/project-houk/Programs
-    # download the xtb release you want, then unpack it here, e.g.
-    tar -xf xtb-6.7.1-gxtb-*-linux-x86_64.tar.xz
-    ./xtb-6.7.1/bin/xtb --version          # it should print a version
-    ./xtb-6.7.1/bin/xtb --help | grep gxtb # and know --gxtb
+    wget https://github.com/grimme-lab/xtb/releases/download/v6.7.1/xtb-6.7.1-linux-x86_64.tar.xz
+    tar -xf xtb-6.7.1-linux-x86_64.tar.xz
 
-Remember that `bin` path: the next step wants it. Nothing else about xtb
-matters here — the installer records where it is and the job script puts it on
-`PATH` for you.
+That is the standard build. The **g-xTB build** is a separate download from the
+same project and is the one to use if you will run `--gxtb` calculations; if
+you were given a tarball for it, unpack that here instead. `install_crest.sh`
+checks which one you ended up with and says so.
+
+Then confirm it works, from that directory:
+
+    ./xtb-6.7.1/bin/xtb --version           # prints a version
+    ./xtb-6.7.1/bin/xtb --help | grep gxtb  # prints --gxtb if this is that build
+
+**Remember that `bin` path** — `~/project-houk/Programs/xtb-6.7.1/bin` in this
+example. It is the only thing step 4 needs from all of this. The installer
+records where xtb is and the job script puts it on `PATH` for you.
+
+Why you install this one by hand and not CREST: xtb comes in builds that differ
+in what they can do, and which one you want is a decision about your chemistry,
+not about the pipeline.
 
 ## Step 3 — check before installing
 
@@ -54,9 +70,9 @@ Writes nothing, submits nothing. It looks for `qsub`, a working `crest`, a
 working `xtb` (and whether that xtb knows `--gxtb`), xtb's parameter directory,
 the two tools on your `PATH`, and it runs the test suite.
 
-On a fresh account the tools will fail — that is step 4. What matters here is
-whether **crest and xtb run**. If they do not, load the module that provides
-them, or point at them directly:
+On a fresh account, expect `FAIL` on both tools, and on the test suite — none
+of it exists yet, and step 4 is what creates it. What matters here is whether
+**crest and xtb run**. If they do not, point at them directly:
 
     ./install_crest.sh --crest-bin /path/to/crest --xtb-bin /path/to/xtb/bin
 
@@ -76,6 +92,7 @@ Everything is a separate flag if you want the pieces apart:
 
 | flag | means |
 |---|---|
+| `--example` | write `./crest_example/`. It also re-runs the install, which is harmless |
 | `--prefix DIR` | everything under one directory |
 | `--bindir DIR` | just the tools |
 | `--crest-dir DIR` | where CREST itself goes |
@@ -95,6 +112,17 @@ needs only that `bin` on their `PATH`.
     ./install_crest.sh --check
 
 Everything should be `ok`, ending with `Passed N/N checks.`
+
+Two things that make it come back short of that:
+
+- **`runcrest.py on PATH is /somewhere/else`** — you already had a copy of the
+  tools, and it sits earlier on your `PATH` than the one you just installed.
+  That older copy is what will run. Delete it, or install over it with
+  `--bindir <that directory>`.
+- **`runcrest.py does not run under ...`** — your `python3` is too old (it
+  needs 3.7+). On Hoffman2 the bare login `python3` is 3.6.8; fix it with
+
+      module load python/3.9.6
 
 ## Step 6 — a real search, on the included example
 
@@ -150,6 +178,9 @@ surviving topology yourself.
 | `this xtb does not know --gxtb` | you installed a plain xtb build. Install the gxtb one, or put `require_gxtb = no` in your config |
 | `no share/xtb beside ...` | xtb cannot find its parameters; point `xtb_path` at the right directory |
 | `command not found: runcrest.py` | `PATH` line missing or shell not reloaded — step 5 |
+| `ModuleNotFoundError: tomllib` or a syntax error | `python3` is older than 3.7 — `module load python/3.9.6` |
+| `destination path 'crest-pipeline' already exists` | you cloned it before; `cd crest-pipeline && git pull` instead |
+| `FAIL test_runcrest.sh` before installing | expected on a fresh account; step 4 installs the suite |
 | `[skip] need both X.toml and X.xyz` | they must sit together in the directory you submit from |
 | `the CREST search exited N` | the search itself failed; scratch is kept, and the log says where |
 | `crest_best.xyz is missing, empty, or NaN` | the search produced nothing usable. Often the OpenBLAS issue on a node type CREST mishandles, or a bad starting structure |

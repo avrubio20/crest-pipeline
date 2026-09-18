@@ -25,11 +25,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:      # tomllib is 3.11+; the one key we need is simpler
+    tomllib = None
 
 DEFAULT_THREADS = 12
 DEFAULT_MEM_PER_CORE = 4    # GB, when threads comes from -p or the default
@@ -149,9 +155,15 @@ def seconds(time_hms: str) -> int:
 def toml_threads(toml_file: str) -> int | None:
     """The 'threads' value from a CREST .toml, or None if absent/unusable."""
     try:
-        with open(toml_file, 'rb') as fh:
-            val = tomllib.load(fh).get('threads')
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        if tomllib is None:
+            # Top-level `threads = N`, which is where CREST puts it.
+            match = re.search(r'^\s*threads\s*=\s*(\d+)\s*$',
+                              Path(toml_file).read_text(), re.M)
+            val = int(match.group(1)) if match else None
+        else:
+            with open(toml_file, 'rb') as fh:
+                val = tomllib.load(fh).get('threads')
+    except (OSError, ValueError) as exc:
         print(f'[warn] could not read threads from {toml_file} ({exc}); '
               'using the default.')
         return None
@@ -199,7 +211,8 @@ def build_script(base: str, nproc: int, mem_mb: int, time_hms: str,
                  scheduler: str, cfg: dict, notopo: bool, extra: str,
                  cregen_ewin: float = 4.0) -> str:
     sched = SCHEDULERS[scheduler]
-    crest, xtb_bin, xtb_path = binaries(cfg)
+    crest, xtb_bin, xtb_path = (shlex.quote(x) if x else x
+                                for x in binaries(cfg))
     topo = '--notopo' if notopo else ''
     scratch_root = cfg.get('scratch') or sched['scratch']
     copy_back = ' '.join(f'"{p}"' for p in COPY_BACK)
@@ -242,18 +255,28 @@ echo "scratch: $tempdir"
 COPY_BACK=( {copy_back} )
 DO_NOT_COPY=( {do_not_copy} )
 _skip() {{ local b="$1"; for x in "${{DO_NOT_COPY[@]}}"; do [[ "$b" == $x ]] && return 0; done; return 1; }}
+# True if every coordinate in an xyz is a finite number. Only the x/y/z columns
+# are read: a comment line mentioning "inf" is not a broken structure.
+_finite() {{
+  awk 'NF>=4 && $1 ~ /^[A-Za-z]/ {{
+         for (i = 2; i <= 4; i++)
+           if ($i ~ /[nN][aA][nN]|[iI][nN][fF]/ || $i !~ /^[-+.0-9eEdD]+$/) exit 1
+       }}' "$1"
+}}
+copy_failed=0
 copy_back() {{
   shopt -s nullglob
   for pat in "${{COPY_BACK[@]}}"; do
     for f in "$tempdir"/$pat; do
       [[ -f "$f" ]] || continue
       _skip "$(basename "$f")" && continue
-      # NaN coordinates stay in scratch rather than overwriting good results.
-      if [[ "$f" == *.xyz ]] && grep -qi nan "$f"; then
-        echo "[warn] not copying back $(basename "$f"): contains NaN (kept in $tempdir)" >&2
+      # Bad coordinates stay in scratch rather than overwriting good results.
+      if [[ "$f" == *.xyz ]] && ! _finite "$f"; then
+        echo "[warn] not copying back $(basename "$f"): coordinates are not finite" >&2
         continue
       fi
-      cp -a "$f" "$submitdir/" 2>/dev/null || true
+      cp -a "$f" "$submitdir/" 2>/dev/null || {{
+        echo "[warn] could not copy back $(basename "$f")" >&2; copy_failed=1; }}
     done
   done
   shopt -u nullglob
@@ -264,15 +287,22 @@ _on_exit() {{
   end=$(date +%s)
   printf 'Job %s ended at %s (elapsed %02d:%02d:%02d, rc=%s)\\n' "$jobid" "$(date)" \\
     $(((end-start)/3600)) $(((end-start)%3600/60)) $(((end-start)%60)) "$rc"
-  if [[ $rc -eq 0 ]]; then rm -rf "$tempdir"; else echo "scratch kept for debugging: $tempdir"; fi
+  if [[ $rc -eq 0 && $copy_failed -eq 0 ]]; then
+    rm -rf "$tempdir"
+  else
+    echo "scratch kept: $tempdir"
+  fi
 }}
 trap copy_back USR1          # five minutes before the walltime kill
 trap 'exit 143' TERM
 trap _on_exit EXIT
 
-mkdir -p "$tempdir"
-cp "$submitdir/{base}.toml" "$submitdir/{base}.xyz" "$tempdir/"
-cd "$tempdir"
+# If staging fails, stop: CREST would otherwise run in the submit directory
+# and overwrite what is already there.
+mkdir -p "$tempdir" || {{ echo "ERROR: cannot create $tempdir" >&2; exit 1; }}
+cp "$submitdir/{base}.toml" "$submitdir/{base}.xyz" "$tempdir/" \
+  || {{ echo "ERROR: cannot stage inputs into $tempdir" >&2; exit 1; }}
+cd "$tempdir" || {{ echo "ERROR: cannot enter $tempdir" >&2; exit 1; }}
 
 # --T beats a `threads` key in the .toml, so it is passed explicitly and
 # always equals what the scheduler allocated.
@@ -284,13 +314,19 @@ if [[ $rc -ne 0 ]]; then
   echo "ERROR: the CREST search exited $rc; not running cregen on its output." >&2
   exit $rc
 fi
-if [[ ! -s crest_best.xyz ]] || grep -qi nan crest_best.xyz; then
+if [[ ! -s crest_best.xyz ]] || ! _finite crest_best.xyz; then
   echo "ERROR: crest_best.xyz is missing, empty, or NaN -- the search did not" >&2
   echo "       produce a usable structure, so cregen would only launder it." >&2
   exit 1
 fi
 {crest} crest_best.xyz -cregen crest_conformers.xyz -ewin {cregen_ewin:g} \\
     -ethr 0.31 -rthr 0.2 {topo}
+rc=$?
+[[ $rc -eq 0 ]] || exit $rc
+if [[ ! -s crest_conformers.xyz ]] || ! _finite crest_conformers.xyz; then
+  echo "ERROR: the sort produced no usable ensemble." >&2
+  exit 1
+fi
 """
 
 
@@ -301,21 +337,33 @@ def parse_args():
 
     p.add_argument('toml_files', nargs='+', help='CREST .toml input file(s)')
 
+    def positive(text):
+        value = int(text)
+        if value < 1:
+            raise argparse.ArgumentTypeError('must be 1 or more')
+        return value
+
+    def positive_float(text):
+        value = float(text)
+        if value <= 0:
+            raise argparse.ArgumentTypeError('must be greater than zero')
+        return value
+
     res = p.add_argument_group('resources')
-    res.add_argument('-p', type=int, help="threads; overrides a 'threads' key in "
+    res.add_argument('-p', type=positive, help="threads; overrides a 'threads' key in "
                      f"the .toml (default: the .toml's, else {DEFAULT_THREADS})")
-    res.add_argument('-m', type=int, help='memory in GB (default: '
+    res.add_argument('-m', type=positive, help='memory in GB (default: '
                      f'{DEFAULT_MEM_PER_CORE}x threads, or {TOML_MEM_PER_CORE}x '
                      'when threads comes from the .toml)')
     res.add_argument('-t', default=str(DEFAULT_TIME_H),
                      help='walltime in hours or HH:MM:SS (default: 24)')
 
     samp = p.add_argument_group('sampling')
-    samp.add_argument('--ewin', type=float,
+    samp.add_argument('--ewin', type=positive_float,
                       help='energy window in kcal/mol for the search. Raise it '
                            '(e.g. 12) to keep more diverse, higher-energy '
                            'conformers -- worth it for NCI and H-bonded complexes.')
-    samp.add_argument('--mdlen', type=float,
+    samp.add_argument('--mdlen', type=positive_float,
                       help='metadynamics length in ps; raise for more sampling')
     samp.add_argument('--v4', action='store_true',
                       help='the iMTD-sMTD workflow: more thorough than the default v3')
@@ -376,13 +424,18 @@ def main():
     # the other throws away exactly what you widened it to keep.
     cregen_ewin = a.ewin if a.ewin else 4.0
 
+    failures = 0
     for toml_file in a.toml_files:
-        base = os.path.splitext(os.path.basename(toml_file))[0]
-        if not (os.path.isfile(f'{base}.toml') and os.path.isfile(f'{base}.xyz')):
-            print(f'[skip] need both {base}.toml and {base}.xyz')
+        # Inputs live beside their .toml, which is not necessarily the
+        # directory you are standing in.
+        toml_path = Path(toml_file)
+        work, base = toml_path.parent, toml_path.stem
+        if not ((work / f'{base}.toml').is_file() and (work / f'{base}.xyz').is_file()):
+            print(f'[skip] need both {base}.toml and {base}.xyz in {work}')
+            failures += 1
             continue
 
-        nproc, mem_gb, source = resolve_resources(a, f'{base}.toml')
+        nproc, mem_gb, source = resolve_resources(a, str(work / f'{base}.toml'))
         body = build_script(base, nproc, mem_gb * 1024, time_hms, scheduler,
                             config, a.notopo, ' '.join(extra), cregen_ewin)
         if a.dry_run:
@@ -390,8 +443,8 @@ def main():
             continue
 
         print(f'{base}: {nproc} threads ({source}), {mem_gb} GB, {scheduler}')
-        os.makedirs('joblogs', exist_ok=True)   # the scheduler opens -o before the job runs
-        script = Path(f'{base}_crest.sh')
+        (work / 'joblogs').mkdir(exist_ok=True)   # the scheduler opens -o first
+        script = work / f'{base}_crest.sh'
         script.write_text(body)
         script.chmod(0o755)
         if a.no_submit:
@@ -402,9 +455,18 @@ def main():
         if submit is None:
             sys.exit(f'ERROR: no {SCHEDULERS[scheduler]["submit"]} on PATH. Use '
                      '--no-submit and submit by hand, or run this on a login node.')
-        r = subprocess.run([submit, str(script)], capture_output=True, text=True)
-        print(r.stdout.strip() if r.returncode == 0
-              else f'[error] {base}: {r.stderr.strip()}')
+        # Submitted from the .toml's directory, so the job's own idea of where
+        # it started matches where its inputs are.
+        r = subprocess.run([submit, script.name], capture_output=True, text=True,
+                           cwd=work)
+        if r.returncode == 0:
+            print(r.stdout.strip())
+        else:
+            print(f'[error] {base}: {r.stderr.strip()}', file=sys.stderr)
+            failures += 1
+
+    if failures:
+        sys.exit(f'ERROR: {failures} input(s) were not submitted.')
 
 
 if __name__ == '__main__':
