@@ -17,9 +17,8 @@
 #   --add-path        put bindir on your PATH
 #   --force           replace installed files that differ from these
 #
-# CREST and xtb are not downloaded: they are usually already on the cluster, so
-# this finds them and records where. Point at particular ones with --crest-bin
-# and --xtb-bin. Re-running is safe and nothing here ever submits a job.
+# CREST and xtb are not downloaded -- clusters have them. This finds them and
+# records where. Re-running is safe and nothing here ever submits a job.
 set -uo pipefail
 
 TOOLS=(runcrest.py prepcrest.py)
@@ -87,8 +86,7 @@ cfg() { [[ -f "$CONFIG" ]] && sed -n "s/^ *$1 *= *//p" "$CONFIG" | head -1; }
 CFG_BINDIR="$(cfg bindir)"; CFG_CREST="$(cfg crest)"
 CFG_XTB_BIN="$(cfg xtb_bin)"; CFG_SCRATCH="$(cfg scratch)"
 
-# Where CREST and xtb already are. PATH first, since a module or a group
-# install puts them there; then the places people keep them by hand.
+# PATH first (a module or group install puts them there), then by hand.
 find_crest() {
     command -v crest 2>/dev/null && return 0
     local c
